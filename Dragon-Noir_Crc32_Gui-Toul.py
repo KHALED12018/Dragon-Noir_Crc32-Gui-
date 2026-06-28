@@ -1,194 +1,321 @@
 import os
+import binascii
 import struct
+import random
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
-class CRC32Engine:
-    POLY = 0xEDB88320
-
-    def __init__(self):
-        self.table = [0] * 256
-        self.reverse_table = [0] * 256
-        self._build_tables()
-
-    def _build_tables(self):
-        for i in range(256):
-            fwd = i
-            for _ in range(8):
-                if fwd & 1:
-                    fwd = (fwd >> 1) ^ self.POLY
-                else:
-                    fwd >>= 1
-            self.table[i] = fwd & 0xFFFFFFFF
-
-            rev = i << 24
-            for _ in range(8):
-                if rev & 0x80000000:
-                    rev = ((rev ^ self.POLY) << 1) | 1
-                else:
-                    rev <<= 1
-                rev &= 0xFFFFFFFF
-            self.reverse_table[i] = rev
-
-    def calculate(self, data: bytes) -> int:
-        crc = 0xFFFFFFFF
-        for byte in data:
-            crc = (crc >> 8) ^ self.table[(crc ^ byte) & 0xFF]
-        return crc ^ 0xFFFFFFFF
-
-    def forge_in_place(self, data: bytes, wanted_crc: int) -> bytes:
-        if len(data) < 4:
-            raise ValueError("File is too small")
-        prefix_data = data[:-4]
-        fwd_crc = 0xFFFFFFFF
-        for byte in prefix_data:
-            fwd_crc = (fwd_crc >> 8) ^ self.table[(fwd_crc ^ byte) & 0xFF]
-        bkd_crc = wanted_crc ^ 0xFFFFFFFF
-        for byte in struct.pack('<L', fwd_crc)[::-1]:
-            bkd_crc = ((bkd_crc << 8) & 0xFFFFFFFF) ^ self.reverse_table[bkd_crc >> 24] ^ byte
-        return prefix_data + struct.pack('<L', bkd_crc)
-
-class CRCManipGUI:
+class DragonNoirGX6605S:
     def __init__(self, root):
         self.root = root
-        self.root.title("Dragon-Noir_CRC-manipulator Professional v0.6.0")
-        self.root.geometry("680x420")
-        self.root.configure(bg="#1e293b")
+        self.root.title("DRAGON_NOIR_GX6605S-GUI_FIXED")
+        self.root.geometry("700x650")
+        self.root.configure(bg="#0f172a")
+        self.root.resizable(True, True)
         
-        self.engine = CRC32Engine()
-        self.target_file_path = ""
-        self.original_file_path = ""
-        self.original_crc_val = None
+        self.modified_path = tk.StringVar()
+        self.original_path = tk.StringVar()
+        self.modified_crc_str = tk.StringVar(value="00000000")
+        self.original_crc_str = tk.StringVar(value="00000000")
+        self.diff_crc_str = tk.StringVar(value="00000000")
+        
+        self.create_ui()
 
-        self._create_widgets()
+    def create_ui(self):
+        title_bg = tk.Frame(self.root, bg="#1e293b", bd=2, relief="raised")
+        title_bg.pack(pady=20, fill="x", padx=20)
+        
+        title_label = tk.Label(
+            title_bg, 
+            text="DRAGON NOIR GX6605S FIXED", 
+            font=("Courier New", 22, "bold"), 
+            fg="#38bdf8", 
+            bg="#0f172a",
+            bd=4,
+            relief="sunken",
+            padx=10,
+            pady=10
+        )
+        title_label.pack(fill="x", padx=4, pady=4)
+        
+        file_frame = tk.LabelFrame(
+            self.root, 
+            text=" FILE MANAGEMENT ", 
+            font=("Arial", 10, "bold"),
+            fg="#38bdf8", 
+            bg="#1e293b", 
+            bd=2, 
+            relief="groove"
+        )
+        file_frame.pack(pady=10, fill="x", padx=20, ipady=10)
+        
+        mod_btn = tk.Button(
+            file_frame, 
+            text="Open Modified File", 
+            command=self.load_modified,
+            bg="#0284c7", 
+            fg="white", 
+            font=("Arial", 10, "bold"),
+            activebackground="#0369a1",
+            activeforeground="white",
+            bd=3,
+            relief="raised"
+        )
+        mod_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        
+        mod_entry = tk.Entry(
+            file_frame, 
+            textvariable=self.modified_path, 
+            width=50, 
+            bg="#334155", 
+            fg="#f8fafc",
+            insertbackground="white"
+        )
+        mod_entry.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        
+        orig_btn = tk.Button(
+            file_frame, 
+            text="Open Original File", 
+            command=self.load_original,
+            bg="#0284c7", 
+            fg="white", 
+            font=("Arial", 10, "bold"),
+            activebackground="#0369a1",
+            activeforeground="white",
+            bd=3,
+            relief="raised"
+        )
+        orig_btn.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        
+        orig_entry = tk.Entry(
+            file_frame, 
+            textvariable=self.original_path, 
+            width=50, 
+            bg="#334155", 
+            fg="#f8fafc",
+            insertbackground="white"
+        )
+        orig_entry.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
+        
+        file_frame.columnconfigure(1, weight=1)
+        
+        crc_frame = tk.LabelFrame(
+            self.root, 
+            text=" CRYPTOGRAPHIC INTEGRITY CHECK (CRC32 S1) ", 
+            font=("Arial", 10, "bold"),
+            fg="#38bdf8", 
+            bg="#1e293b", 
+            bd=2, 
+            relief="groove"
+        )
+        crc_frame.pack(pady=10, fill="x", padx=20, ipady=10)
+        
+        tk.Label(crc_frame, text="Modified File CRC32:", font=("Arial", 10, "bold"), fg="#94a3b8", bg="#1e293b").grid(row=0, column=0, padx=15, pady=5, sticky="w")
+        tk.Entry(crc_frame, textvariable=self.modified_crc_str, font=("Courier New", 11, "bold"), fg="#ef4444", bg="#0f172a", state="readonly", width=20, justify="center").grid(row=0, column=1, padx=15, pady=5)
+        
+        tk.Label(crc_frame, text="Original File CRC32:", font=("Arial", 10, "bold"), fg="#94a3b8", bg="#1e293b").grid(row=1, column=0, padx=15, pady=5, sticky="w")
+        tk.Entry(crc_frame, textvariable=self.original_crc_str, font=("Courier New", 11, "bold"), fg="#22c55e", bg="#0f172a", state="readonly", width=20, justify="center").grid(row=1, column=1, padx=15, pady=5)
+        
+        tk.Label(crc_frame, text="XOR Injection Delta:", font=("Arial", 10, "bold"), fg="#38bdf8", bg="#1e293b").grid(row=2, column=0, padx=15, pady=5, sticky="w")
+        tk.Entry(crc_frame, textvariable=self.diff_crc_str, font=("Courier New", 11, "bold"), fg="#eab308", bg="#0f172a", state="readonly", width=20, justify="center").grid(row=2, column=1, padx=15, pady=5)
+        
+        process_frame = tk.Frame(self.root, bg="#0f172a")
+        process_frame.pack(pady=25, fill="x", padx=20)
+        
+        match_btn = tk.Button(
+            process_frame, 
+            text="EXECUTE DUAL-BLOCK MATCHING & INJECTION", 
+            command=self.execute_patch,
+            bg="#10b981", 
+            fg="white", 
+            font=("Arial", 12, "bold"),
+            activebackground="#059669",
+            activeforeground="white",
+            bd=5,
+            relief="raised",
+            pady=8
+        )
+        match_btn.pack(fill="x")
 
-    def _create_widgets(self):
-        title_lbl = tk.Label(self.root, text="Dragon-Noir $ CRC-Manipulator &  Professional", font=("Helvetica", 14, "bold"), fg="#38bdf8", bg="#1e293b")
-        title_lbl.pack(pady=15)
+    def calculate_crc32(self, data):
+        return binascii.crc32(data) & 0xFFFFFFFF
 
-        target_frame = tk.LabelFrame(self.root, text=" Target File ", font=("Helvetica", 10, "bold"), bg="#0f172a", fg="#f8fafc", bd=1, relief="solid")
-        target_frame.pack(fill="x", padx=20, pady=10)
+    def find_end_of_data(self, data):
+        idx = len(data) - 1
+        while idx >= 0 and data[idx] == 0xFF:
+            idx -= 1
+        return idx + 1
 
-        self.entry_target = tk.Entry(target_frame, width=55, bd=1, relief="solid", font=("Consolas", 10), bg="#1e293b", fg="#f8fafc", insertbackground="white")
-        self.entry_target.pack(side="left", padx=10, pady=10, expand=True, fill="x")
-
-        btn_browse_target = tk.Button(target_frame, text="Browse...", bg="#38bdf8", fg="#0f172a", activebackground="#0ea5e9", font=("Helvetica", 9, "bold"), relief="flat", padx=10, command=self._browse_target)
-        btn_browse_target.pack(side="right", padx=10, pady=10)
-
-        orig_frame = tk.LabelFrame(self.root, text=" Reference Original File ", font=("Helvetica", 10, "bold"), bg="#0f172a", fg="#f8fafc", bd=1, relief="solid")
-        orig_frame.pack(fill="x", padx=20, pady=10)
-
-        self.entry_orig = tk.Entry(orig_frame, width=55, bd=1, relief="solid", font=("Consolas", 10), bg="#1e293b", fg="#f8fafc", insertbackground="white")
-        self.entry_orig.pack(side="left", padx=10, pady=10, expand=True, fill="x")
-
-        btn_browse_orig = tk.Button(orig_frame, text="Browse...", bg="#64748b", fg="#f8fafc", activebackground="#475569", font=("Helvetica", 9, "bold"), relief="flat", padx=10, command=self._browse_original)
-        btn_browse_orig.pack(side="right", padx=10, pady=10)
-
-        info_frame = tk.Frame(self.root, bg="#1e293b")
-        info_frame.pack(fill="x", padx=25, pady=10)
-
-        tk.Label(info_frame, text="Target File CRC32:", font=("Helvetica", 10, "bold"), bg="#1e293b", fg="#94a3b8").grid(row=0, column=0, sticky="w", pady=5)
-        self.lbl_target_crc = tk.Label(info_frame, text="00000000", font=("Consolas", 12, "bold"), fg="#ef4444", bg="#1e293b")
-        self.lbl_target_crc.grid(row=0, column=1, sticky="w", padx=15)
-
-        tk.Label(info_frame, text="Original File CRC32:", font=("Helvetica", 10, "bold"), bg="#1e293b", fg="#94a3b8").grid(row=1, column=0, sticky="w", pady=5)
-        self.lbl_orig_crc = tk.Label(info_frame, text="--------", font=("Consolas", 12, "bold"), fg="#22c55e", bg="#1e293b")
-        self.lbl_orig_crc.grid(row=1, column=1, sticky="w", padx=15)
-
-        tk.Label(info_frame, text="Desired CRC32 (Hex):", font=("Helvetica", 10, "bold"), bg="#1e293b", fg="#94a3b8").grid(row=2, column=0, sticky="w", pady=5)
-        self.entry_wanted_crc = tk.Entry(info_frame, font=("Consolas", 12, "bold"), width=12, bd=1, relief="solid", justify="center", bg="#0f172a", fg="#38bdf8", insertbackground="white")
-        self.entry_wanted_crc.grid(row=2, column=1, sticky="w", padx=15)
-        self.entry_wanted_crc.insert(0, "DEADBEEF")
-
-        btn_frame = tk.Frame(self.root, bg="#1e293b")
-        btn_frame.pack(fill="x", padx=20, pady=15)
-
-        self.btn_match = tk.Button(btn_frame, text="Auto Match From Original", bg="#0d9488", fg="#f8fafc", activebackground="#0f766e", font=("Helvetica", 10, "bold"), relief="flat", height=2, command=self._auto_match_value)
-        self.btn_match.pack(side="left", expand=True, fill="x", padx=5)
-
-        self.btn_patch = tk.Button(btn_frame, text="Patch Last 4 Bytes (In-Place)", bg="#2563eb", fg="#f8fafc", activebackground="#1d4ed8", font=("Helvetica", 10, "bold"), relief="flat", height=2, command=self._patch_in_place)
-        self.btn_patch.pack(side="right", expand=True, fill="x", padx=5)
-
-    def _browse_target(self):
+    def load_modified(self):
         path = filedialog.askopenfilename()
         if path:
-            self.target_file_path = path
-            self.entry_target.delete(0, tk.END)
-            self.entry_target.insert(0, path)
-            self._update_target_crc()
+            self.modified_path.set(path)
+            with open(path, "rb") as f:
+                data = f.read()
+            crc = self.calculate_crc32(data)
+            self.modified_crc_str.set(f"{crc:08X}")
+            self.update_delta()
 
-    def _browse_original(self):
+    def load_original(self):
         path = filedialog.askopenfilename()
         if path:
-            self.original_file_path = path
-            self.entry_orig.delete(0, tk.END)
-            self.entry_orig.insert(0, path)
-            self._update_original_crc()
-
-    def _update_target_crc(self):
-        if not self.target_file_path or not os.path.exists(self.target_file_path):
-            return
-        try:
-            with open(self.target_file_path, "rb") as f:
+            self.original_path.set(path)
+            with open(path, "rb") as f:
                 data = f.read()
-            crc = self.engine.calculate(data)
-            self.lbl_target_crc.config(text=f"{crc:08X}")
-        except Exception:
-            self.lbl_target_crc.config(text="ERROR")
+            crc = self.calculate_crc32(data)
+            self.original_crc_str.set(f"{crc:08X}")
+            self.update_delta()
 
-    def _update_original_crc(self):
-        if not self.original_file_path or not os.path.exists(self.original_file_path):
-            return
+    def update_delta(self):
         try:
-            with open(self.original_file_path, "rb") as f:
-                data = f.read()
-            self.original_crc_val = self.engine.calculate(data)
-            self.lbl_orig_crc.config(text=f"{self.original_crc_val:08X}")
-        except Exception:
-            self.lbl_orig_crc.config(text="ERROR")
-
-    def _auto_match_value(self):
-        if self.original_crc_val is not None:
-            self.entry_wanted_crc.delete(0, tk.END)
-            self.entry_wanted_crc.insert(0, f"{self.original_crc_val:08X}")
-        else:
-            messagebox.showwarning("Warning", "Select reference file first.")
-
-    def _patch_in_place(self):
-        if not self.target_file_path or not os.path.exists(self.target_file_path):
-            messagebox.showerror("Error", "Select target file.")
-            return
-
-        hex_str = self.entry_wanted_crc.get().strip().replace("0x", "").replace("0X", "")
-        if len(hex_str) != 8:
-            messagebox.showerror("Error", "Must be 8 hex characters.")
-            return
-
-        try:
-            wanted_crc = int(hex_str, 16)
+            m_crc = int(self.modified_crc_str.get(), 16)
+            o_crc = int(self.original_crc_str.get(), 16)
+            delta = m_crc ^ o_crc
+            self.diff_crc_str.set(f"{delta:08X}")
         except ValueError:
-            messagebox.showerror("Error", "Invalid hex.")
+            pass
+
+    def execute_patch(self):
+        mod_p = self.modified_path.get()
+        orig_p = self.original_path.get()
+        
+        if not mod_p or not orig_p:
+            messagebox.showerror("Error", "Please select both Modified and Original files.")
             return
-
+            
         try:
-            with open(self.target_file_path, "rb") as f:
-                data = f.read()
-
-            if len(data) < 4:
-                messagebox.showerror("Error", "File too small.")
+            with open(mod_p, "rb") as f:
+                mod_data = bytearray(f.read())
+            with open(orig_p, "rb") as f:
+                orig_data = bytearray(f.read())
+                
+            target_crc = self.calculate_crc32(orig_data)
+            target_size = len(orig_data)
+            
+            clean_end = self.find_end_of_data(mod_data)
+            base_payload = mod_data[:clean_end]
+            
+            block_a = bytearray(random.getrandbits(8) for _ in range(1024))
+            block_b = bytearray(block_a)
+            
+            ff_padding_size = target_size - (len(base_payload) + 1024 + 1024 + 1024 + 4)
+            if ff_padding_size < 0:
+                messagebox.showerror("Error", "Modified firmware payload size exceeds original structure constraint.")
                 return
-
-            patched_data = self.engine.forge_in_place(data, wanted_crc)
-
-            with open(self.target_file_path, "wb") as f:
-                f.write(patched_data)
-
-            self._update_target_crc()
-            messagebox.showinfo("Success", "File patched in-place.")
+                
+            final_bin = bytearray()
+            final_bin.extend(base_payload)
+            final_bin.extend(block_a)
+            
+            rem_size = target_size - (len(final_bin) + len(block_b) + 1024 + 4)
+            if rem_size > 0:
+                final_bin.extend(b'\xFF' * rem_size)
+            else:
+                final_bin.extend(b'\xFF' * ff_padding_size)
+                
+            final_bin.extend(block_b)
+            
+            block_c = bytearray(random.getrandbits(8) for _ in range(1024))
+            final_bin.extend(block_c)
+            final_bin.extend(b'\x00\x00\x00\x00')
+            
+            if len(final_bin) != target_size:
+                final_bin = final_bin[:target_size-4] + b'\x00\x00\x00\x00'
+                
+            final_bin = self.apply_crc32_reverse_forge(final_bin, target_crc)
+            
+            save_path = filedialog.asksaveasfilename(defaultextension=".bin", filetypes=[("Binary files", "*.bin")])
+            if save_path:
+                with open(save_path, "wb") as f:
+                    f.write(final_bin)
+                messagebox.showinfo("Success", f"Firmware structure successfully structured and synchronized!\nHex Workshop Target CRC32: {target_crc:08X}")
+                
         except Exception as e:
-            messagebox.showerror("Error", str(e))
+            messagebox.showerror("Processing Error", str(e))
+
+    def apply_crc32_reverse_forge(self, buffer, target_crc):
+        size = len(buffer)
+        if size < 4:
+            return buffer
+            
+        poly = 0xEDB88320
+        
+        table = []
+        for i in range(256):
+            c = i
+            for _ in range(8):
+                if c & 1:
+                    c = poly ^ (c >> 1)
+                else:
+                    c = c >> 1
+            table.append(c)
+            
+        buffer[size-4:] = b'\x00\x00\x00\x00'
+        
+        current_crc = 0xFFFFFFFF
+        for x in buffer[:-4]:
+            current_crc = (current_crc >> 8) ^ table[(current_crc ^ x) & 0xFF]
+            
+        target_state = target_crc ^ 0xFFFFFFFF
+        
+        for i in range(4):
+            last_byte = (target_state >> (i * 8)) & 0xFF
+            for b in range(256):
+                if (table[b] >> 24) == (current_crc >> 24):
+                    buffer[size - 4 + i] = b
+                    current_crc = ((current_crc ^ table[b]) << 8) & 0xFFFFFFFF
+                    break
+                    
+        crc_reverse = target_crc ^ 0xFFFFFFFF
+        for i in range(4):
+            top = crc_reverse >> 24
+            for b in range(256):
+                if (table[b] >> 24) == top:
+                    crc_reverse = ((crc_reverse ^ table[b]) << 8) & 0xFFFFFFFF
+                    crc_reverse |= b
+                    break
+                    
+        current_crc = 0xFFFFFFFF
+        for x in buffer[:-4]:
+            current_crc = (current_crc >> 8) ^ table[(current_crc ^ x) & 0xFF]
+            
+        res = current_crc ^ 0xFFFFFFFF
+        
+        for i in range(4):
+            buffer[size - 4 + i] = 0x00
+            
+        crc = 0xFFFFFFFF
+        for x in buffer[:-4]:
+            crc = (crc >> 8) ^ table[(crc ^ x) & 0xFF]
+            
+        needed = target_crc
+        
+        for i in range(4):
+            for b in range(256):
+                temp_crc = (crc >> 8) ^ table[(crc ^ b) & 0xFF]
+                temp_needed = needed
+                
+        final_bytes = bytearray(4)
+        t_crc = target_crc ^ 0xFFFFFFFF
+        
+        for i in range(4):
+            for b in range(256):
+                if (table[b] >> 24) == (t_crc >> 24):
+                    final_bytes[3-i] = b
+                    t_crc = ((t_crc ^ table[b]) << 8) & 0xFFFFFFFF
+                    break
+                    
+        crc_accum = 0xFFFFFFFF
+        for x in buffer[:-4]:
+            crc_accum = (crc_accum >> 8) ^ table[(crc_accum ^ x) & 0xFF]
+            
+        for i in range(4):
+            buffer[size - 4 + i] = final_bytes[i] ^ (crc_accum & 0xFF)
+            crc_accum = (crc_accum >> 8) ^ table[(crc_accum & 0xFF) ^ buffer[size - 4 + i]]
+            
+        return buffer
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = CRCManipGUI(root)
+    app = DragonNoirGX6605S(root)
     root.mainloop()
